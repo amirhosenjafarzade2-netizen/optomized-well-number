@@ -179,10 +179,25 @@ if dat_features:
     st.success(f"Parsed reservoir properties from {len(dat_features)} .dat files")
     for w, info in dat_features.items():
         f = info["data"]
-        grid_str = f"{f.get('nx','?')}×{f.get('ny','?')}×{f.get('nz','?')}" if f.get('nx') else "?"
-        perm_str = f"Perm I = {safe_format(f.get('perm_i_md'), '{:.1f}')} md" if f.get('perm_i_md') is not None else "Perm I = N/A"
-        kvkh_str = f"Kv/Kh = {safe_format(f.get('kv_kh_ratio'))}" if f.get('kv_kh_ratio') is not None else "Kv/Kh = N/A"
-        area_str = f"Area ≈ {safe_format(f.get('area_acres'), '{:.0f}')} acres" if f.get('area_acres') is not None else "Area = N/A"
+        
+        # Build grid string
+        if f.get('nx') and f.get('ny') and f.get('nz'):
+            grid_str = f"{f['nx']}×{f['ny']}×{f['nz']}"
+        else:
+            grid_str = "?"
+        
+        # Build permeability string
+        perm_val = f.get('perm_i_md')
+        perm_str = f"Perm I = {perm_val:.1f} md" if perm_val is not None else "Perm I = N/A"
+        
+        # Build Kv/Kh string
+        kvkh_val = f.get('kv_kh_ratio')
+        kvkh_str = f"Kv/Kh = {kvkh_val:.3f}" if kvkh_val is not None else "Kv/Kh = N/A"
+        
+        # Build area string
+        area_val = f.get('area_acres')
+        area_str = f"Area ≈ {area_val:.0f} acres" if area_val is not None else "Area = N/A"
+        
         st.write(f"**{w} wells** ({info['file']}): Grid {grid_str}, {perm_str}, {kvkh_str}, {area_str}")
 
 if production_data:
