@@ -67,16 +67,19 @@ def extract_npv_from_excel(excel_path):
             cell = df.iloc[i, col]
             if pd.isna(cell):
                 continue
-            if isinstance(cell, str) and 'number of wells' in cell.lower():
+            cell_str = str(cell).lower()
+            if 'number of wells' in cell_str:
                 # Found header row i, header col = col for 'number of wells'
                 wells_col = col
                 # Find the npv column, look in same row for 'npv'
                 npv_col = None
                 for c in range(col + 1, df.shape[1]):
                     hcell = df.iloc[i, c]
-                    if pd.notna(hcell) and isinstance(hcell, str) and 'npv' in hcell.lower():
-                        npv_col = c
-                        break
+                    if pd.notna(hcell):
+                        hcell_str = str(hcell).lower()
+                        if 'npv' in hcell_str:
+                            npv_col = c
+                            break
                 if npv_col is None:
                     continue
                 # Now read from next rows, same wells_col and npv_col
@@ -88,7 +91,7 @@ def extract_npv_from_excel(excel_path):
                     npv_cell = df.iloc[start_row + j, npv_col]
                     if pd.notna(wells_cell) and pd.notna(npv_cell):
                         try:
-                            wells_num = int(float(wells_cell))  # Handle float
+                            wells_num = int(float(wells_cell))  # Handle float or str
                             npv_num = float(npv_cell)
                             npv_dict[wells_num] = npv_num
                         except ValueError:
@@ -119,11 +122,28 @@ def build_feature_vector(wells, base_features, production=None):
   
     return np.array(vec).reshape(1, -1)
 
+def get_production(w, production_data, wells_list):
+    if not production_data:
+        return None
+    avg_rf = np.mean([p.get('recovery_factor', 0.3) for p in production_data.values()])
+    avg_oil = np.mean([p.get('cum_oil_mstb', 1000) for p in production_data.values()])
+    avg_water = np.mean([p.get('cum_water_mstb', 500) for p in production_data.values()])
+    mean_wells = np.mean(list(production_data.keys()))
+    scale = w / mean_wells if mean_wells > 0 else 1
+    if w in production_data:
+        return production_data[w]
+    else:
+        return {
+            'recovery_factor': avg_rf,
+            'cum_oil_mstb': avg_oil * scale,
+            'cum_water_mstb': avg_water * scale
+        }
+
 def predict_optimum(npv_data, base_features, production_data, max_wells=20):
     wells_list = np.array(sorted(npv_data.keys()))
     npv_list = np.array([npv_data[w] for w in wells_list])
   
-    X = np.vstack([build_feature_vector(w, base_features, production_data.get(w)) for w in wells_list])
+    X = np.vstack([build_feature_vector(w, base_features, get_production(w, production_data, wells_list)) for w in wells_list])
   
     model = make_pipeline(PolynomialFeatures(degree=3), LinearRegression())
     model.fit(X, npv_list)
@@ -136,7 +156,8 @@ def predict_optimum(npv_data, base_features, production_data, max_wells=20):
             avg_rf = np.mean([p.get('recovery_factor', 0.3) for p in production_data.values()])
             avg_oil = np.mean([p.get('cum_oil_mstb', 1000) for p in production_data.values()])
             avg_water = np.mean([p.get('cum_water_mstb', 500) for p in production_data.values()])
-            scale = w / np.mean(wells_list)
+            mean_wells = np.mean(list(production_data.keys()))
+            scale = w / mean_wells if mean_wells > 0 else 1
             approx_prod = {
                 'recovery_factor': avg_rf,
                 'cum_oil_mstb': avg_oil * scale,
@@ -192,7 +213,7 @@ with col1:
     if npv_data:
         st.success(f"✅ NPV Data: {len(npv_data)} scenarios")
     else:
-        st.warning("⚠️ NPV Data: Not uploaded")
+        st.warning("⚠️ NPV Data: Not detected or not uploaded")
 with col2:
     if dat_features:
         st.success(f"✅ DAT Files: {len(dat_features)} parsed")
