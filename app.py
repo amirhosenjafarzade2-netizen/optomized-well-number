@@ -120,7 +120,7 @@ def build_feature_vector(wells, base_features, production=None):
         water_penalty = -production.get('cum_water_mstb', 0) / (production.get('cum_oil_mstb', 1) + 1e-6)
         vec.extend([rf, oil_per_well, water_penalty])
   
-    return np.array(vec).reshape(1, -1)
+    return np.array(vec)
 
 def get_production(w, production_data, wells_list):
     if not production_data:
@@ -139,56 +139,49 @@ def get_production(w, production_data, wells_list):
             'cum_water_mstb': avg_water * scale
         }
 
-def predict_optimum(npv_data, base_features, production_data, max_wells=20):
+def predict_optimum(npv_data, base_features, production_data, max_wells=30):
     wells_list = np.array(sorted(npv_data.keys()))
     npv_list = np.array([npv_data[w] for w in wells_list])
   
-    X = np.vstack([build_feature_vector(w, base_features, get_production(w, production_data, wells_list)) for w in wells_list])
+    prod_funcs = [get_production(w, production_data, wells_list) for w in wells_list]
+    X = np.array([build_feature_vector(w, base_features, p) for w, p in zip(wells_list, prod_funcs)])
   
     model = make_pipeline(PolynomialFeatures(degree=3), LinearRegression())
     model.fit(X, npv_list)
   
-    candidate_wells = np.arange(min(wells_list), max_wells + 1)
-    X_pred = []
-    for w in candidate_wells:
-        approx_prod = {}
-        if production_data:
-            avg_rf = np.mean([p.get('recovery_factor', 0.3) for p in production_data.values()])
-            avg_oil = np.mean([p.get('cum_oil_mstb', 1000) for p in production_data.values()])
-            avg_water = np.mean([p.get('cum_water_mstb', 500) for p in production_data.values()])
-            mean_wells = np.mean(list(production_data.keys()))
-            scale = w / mean_wells if mean_wells > 0 else 1
-            approx_prod = {
-                'recovery_factor': avg_rf,
-                'cum_oil_mstb': avg_oil * scale,
-                'cum_water_mstb': avg_water * scale
-            }
-        X_pred.append(build_feature_vector(w, base_features, approx_prod)[0])
-    X_pred = np.array(X_pred)
+    min_w = min(wells_list)
+    max_existing = max(wells_list)
+    candidate_wells = np.arange(min_w, max_wells + 1)
+    
+    X_pred = np.array([build_feature_vector(w, base_features, get_production(w, production_data, wells_list)) for w in candidate_wells])
     pred_npv = model.predict(X_pred)
   
     best_idx = np.argmax(pred_npv)
-    return int(candidate_wells[best_idx]), pred_npv[best_idx], candidate_wells, pred_npv, wells_list, npv_list
+    return int(candidate_wells[best_idx]), pred_npv[best_idx], candidate_wells, pred_npv, wells_list, npv_list, max_existing
 
 # Streamlit UI
 st.set_page_config(page_title="Reservoir Well Optimizer", layout="wide")
 st.title("🛢 Reservoir Development Optimizer")
 st.markdown("**Physics + Production + Economics Informed Well Count Predictor**")
+
 # File uploaders
 uploaded_excel = st.file_uploader("📊 Upload NPV Excel file (Required)", type=["xlsx"])
 uploaded_dats = st.file_uploader("📄 Upload CMG .dat files (Optional)", type=["dat"], accept_multiple_files=True)
 uploaded_outs = st.file_uploader("📈 Upload CMG .out files (Optional)", type=["out", "txt"], accept_multiple_files=True)
+
 # Initialize storage for parsed data
 npv_data = {}
 production_data = {}
 base_features = {}
 dat_features = {}
+
 # Parse uploaded files
 if uploaded_excel:
     with open("temp.xlsx", "wb") as f:
         f.write(uploaded_excel.getbuffer())
     npv_data = extract_npv_from_excel("temp.xlsx")
     os.remove("temp.xlsx")
+
 if uploaded_dats:
     for f in uploaded_dats:
         content = f.getvalue().decode('utf-8', errors='ignore')
@@ -197,6 +190,7 @@ if uploaded_dats:
             data = parse_dat_features(content)
             if data:
                 dat_features[wells] = {"file": f.name, "data": data}
+
 if uploaded_outs:
     for f in uploaded_outs:
         content = f.getvalue().decode('utf-8', errors='ignore')
@@ -205,6 +199,7 @@ if uploaded_outs:
             data = parse_out_production(content)
             if data:
                 production_data[wells] = data
+
 # Display file upload status
 st.markdown("---")
 st.subheader("📁 Upload Status")
@@ -224,6 +219,7 @@ with col3:
         st.success(f"✅ OUT Files: {len(production_data)} parsed")
     else:
         st.info("ℹ️ OUT Files: Optional")
+
 # Show detailed information if files are uploaded
 if npv_data or dat_features or production_data:
     st.markdown("---")
@@ -242,21 +238,10 @@ if npv_data or dat_features or production_data:
         with st.expander("🗂️ Reservoir Properties (.dat files)", expanded=False):
             for w, info in dat_features.items():
                 f = info["data"]
-              
-                if f.get('nx') and f.get('ny') and f.get('nz'):
-                    grid_str = f"{f['nx']}×{f['ny']}×{f['nz']}"
-                else:
-                    grid_str = "?"
-              
-                perm_val = f.get('perm_i_md')
-                perm_str = f"{perm_val:.1f} md" if perm_val is not None else "N/A"
-              
-                kvkh_val = f.get('kv_kh_ratio')
-                kvkh_str = f"{kvkh_val:.3f}" if kvkh_val is not None else "N/A"
-              
-                area_val = f.get('area_acres')
-                area_str = f"{area_val:.0f} acres" if area_val is not None else "N/A"
-              
+                grid_str = f"{f.get('nx')}×{f.get('ny')}×{f.get('nz')}" if f.get('nx') and f.get('ny') and f.get('nz') else "?"
+                perm_str = f"{f.get('perm_i_md', 'N/A'):.1f} md" if f.get('perm_i_md') is not None else "N/A"
+                kvkh_str = f"{f.get('kv_kh_ratio', 'N/A'):.3f}" if f.get('kv_kh_ratio') is not None else "N/A"
+                area_str = f"{f.get('area_acres', 'N/A'):.0f} acres" if f.get('area_acres') is not None else "N/A"
                 st.markdown(f"""
                 **{w} wells** (`{info['file']}`)
                 - Grid: {grid_str}
@@ -268,15 +253,14 @@ if npv_data or dat_features or production_data:
     if production_data:
         with st.expander("📈 Production Data (.out files)", expanded=False):
             for w, p in production_data.items():
-                rf_val = p.get('recovery_factor')
-                rf_str = f"{rf_val:.1%}" if rf_val is not None else "N/A"
-              
+                rf_str = f"{p.get('recovery_factor', 'N/A'):.1%}" if p.get('recovery_factor') is not None else "N/A"
                 st.markdown(f"""
                 **{w} wells**
                 - Cumulative Oil: {p.get('cum_oil_mstb', 0):.1f} MSTB
                 - Recovery Factor: {rf_str}
                 - OOIP: {p.get('ooip_mstb', 0):.1f} MSTB
                 """)
+
 # Average base features from .dat files
 if dat_features:
     keys = ['area_acres', 'perm_i_md', 'kv_kh_ratio']
@@ -284,9 +268,9 @@ if dat_features:
         vals = [f['data'].get(k) for f in dat_features.values() if f['data'].get(k) is not None]
         if vals:
             base_features[k] = np.mean(vals)
+
 # Prediction section with button
 st.markdown("---")
-# Check if ready to predict
 can_predict = npv_data and len(npv_data) >= 2
 if can_predict:
     st.subheader("🚀 Run Optimization Analysis")
@@ -305,8 +289,8 @@ if can_predict:
     if run_optimization:
         with st.spinner("🔄 Running machine learning optimization..."):
             try:
-                best_wells, best_npv, cand_wells, pred_npv, act_wells, act_npv = predict_optimum(
-                    npv_data, base_features, production_data
+                best_wells, best_npv, cand_wells, pred_npv, act_wells, act_npv, max_existing = predict_optimum(
+                    npv_data, base_features, production_data, max_wells=30
                 )
               
                 st.markdown("---")
@@ -324,25 +308,36 @@ if can_predict:
               
                 # Plot
                 st.markdown("### 📊 NPV vs Well Count Analysis")
+                st.info("The orange prediction curve is now extended up to 30 wells so you can clearly see the behavior beyond your tested scenarios (diminishing returns or further upside).")
+                
                 fig, ax = plt.subplots(figsize=(12, 7))
                 ax.scatter(act_wells, act_npv, color='#1f77b4', s=150, label='Actual NPV (Excel Data)',
                           zorder=5, edgecolors='white', linewidth=2)
-                ax.plot(cand_wells, pred_npv, color='#ff7f0e', linewidth=3, label='ML Predicted Trend', alpha=0.8)
+                ax.plot(cand_wells, pred_npv, color='#ff7f0e', linewidth=3, label='ML Predicted Trend (extrapolated)', alpha=0.8)
+                
+                # Highlight the existing range
+                ax.axvspan(min(act_wells), max_existing, alpha=0.1, color='blue', label='Tested Scenarios Range')
+                
                 ax.axvline(best_wells, color='#2ca02c', linestyle='--', linewidth=2.5,
                           label=f'Optimum: {best_wells} wells', alpha=0.8)
                 ax.scatter([best_wells], [best_npv], color='#2ca02c', s=300, marker='*',
-                          zorder=6, edgecolors='white', linewidth=2, label='Optimal Point')
+                          zorder=6, edgecolors='white', linewidth=2, label='Predicted Optimal Point')
               
                 ax.set_xlabel('Number of Wells', fontsize=12, fontweight='bold')
                 ax.set_ylabel('NPV (USD)', fontsize=12, fontweight='bold')
-                ax.set_title('Well Count Optimization Analysis', fontsize=14, fontweight='bold', pad=20)
+                ax.set_title('Well Count Optimization Analysis – Extended Prediction', fontsize=14, fontweight='bold', pad=20)
                 ax.grid(True, alpha=0.3, linestyle='--')
                 ax.legend(loc='best', fontsize=10, framealpha=0.9)
               
                 # Format y-axis as currency
                 from matplotlib.ticker import FuncFormatter
                 def currency(x, pos):
-                    return f'${x/1e6:.1f}M' if abs(x) >= 1e6 else f'${x/1e3:.0f}K'
+                    if abs(x) >= 1e9:
+                        return f'${x/1e9:.1f}B'
+                    elif abs(x) >= 1e6:
+                        return f'${x/1e6:.1f}M'
+                    else:
+                        return f'${x/1e3:.0f}K'
                 ax.yaxis.set_major_formatter(FuncFormatter(currency))
               
                 plt.tight_layout()
@@ -350,52 +345,48 @@ if can_predict:
               
                 # Recommendations
                 st.markdown("### 💡 Recommendations")
-                if best_wells > max(act_wells):
+                if best_wells > max_existing:
                     st.success(f"""
                     **Upside Potential Identified!**
                   
-                    The model predicts that increasing well count to **{best_wells} wells** (beyond your current maximum of {max(act_wells)} wells)
+                    The model predicts that increasing well count to **{best_wells} wells** (beyond your current maximum of {max_existing} wells)
                     could improve NPV by **${(best_npv - max(act_npv)):,.0f}** ({improvement:+.1f}%).
                   
-                    Consider running additional scenarios to validate this prediction.
+                    Consider running additional reservoir simulations and economic scenarios for {best_wells}–{best_wells+4} wells to validate this prediction.
                     """)
                 elif best_wells < min(act_wells):
                     st.warning(f"""
                     **Diminishing Returns Detected**
                   
-                    The model suggests that **{best_wells} wells** may be optimal, which is fewer than your minimum tested scenario ({min(act_wells)} wells).
+                    The model suggests that **{best_wells} wells** may be optimal, fewer than your minimum tested ({min(act_wells)} wells).
                   
-                    This indicates potential over-development in current plans. Consider cost-benefit analysis for reduced well counts.
+                    This indicates potential over-capitalization in higher well counts.
                     """)
                 else:
                     st.info(f"""
-                    **Optimal Range Identified**
+                    **Optimal Within Tested Range**
                   
-                    The model predicts **{best_wells} wells** is optimal, which falls within your tested range ({min(act_wells)}-{max(act_wells)} wells).
-                  
-                    Your current scenarios cover the optimal development strategy well.
+                    The predicted optimum of **{best_wells} wells** falls within your tested scenarios.
+                    Your current data covers the sweet spot well.
                     """)
               
-                # Model features used
                 with st.expander("🔬 Model Features & Methodology", expanded=False):
                     st.markdown("""
                     **Features Used in ML Model:**
-                    - Well count and quadratic term (interference effects)
+                    - Well count and polynomial terms (captures interference and diminishing returns)
                     - Drainage area per well
-                    - Well interference factor
-                    - Recovery potential (permeability-based)
-                    - Vertical-horizontal permeability effects
+                    - Interference factor
+                    - Permeability-based recovery potential
+                    - Kv/Kh effects
                     """)
-                  
                     if production_data:
-                        st.markdown("- Recovery factor data\n- Oil production per well\n- Water production penalty")
-                  
+                        st.markdown("- Recovery factor\n- Oil production per well\n- Water cut penalty")
                     st.markdown(f"""
-                    **Model Type:** Polynomial Regression (degree 3)
-                  
-                    **Training Data:** {len(npv_data)} scenarios
-                  
-                    **Prediction Range:** {min(cand_wells)} to {max(cand_wells)} wells
+                    **Model:** 3rd-degree Polynomial Regression
+                    
+                    **Extrapolation Range:** Up to 30 wells (extended for better visibility of trend)
+                    
+                    **Training Data:** {len(npv_data)} economic scenarios from your Excel
                     """)
           
             except Exception as e:
