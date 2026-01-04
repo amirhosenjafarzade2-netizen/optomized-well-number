@@ -25,7 +25,6 @@ def parse_dat_features(content):
     features['avg_dx'] = np.mean(all_dx) if all_dx else None
     features['avg_dy'] = np.mean(all_dy) if all_dy else None
     
-    # Fixed regex to capture the value correctly
     permj_match = re.search(r"EQUALSI\s+0\s+([\d.]+)", content, re.IGNORECASE)
     features['perm_i_md'] = float(permj_match.group(1)) if permj_match else None
     
@@ -78,9 +77,6 @@ def extract_npv_from_excel(excel_path):
                 except:
                     pass
     return npv_dict
-
-def safe_format(value, fmt="{:.3f}", default="N/A"):
-    return fmt.format(value) if value is not None else default
 
 def build_feature_vector(wells, base_features, production=None):
     vec = [wells, wells**2]
@@ -137,21 +133,24 @@ st.set_page_config(page_title="Reservoir Well Optimizer", layout="wide")
 st.title("🛢 Reservoir Development Optimizer")
 st.markdown("**Physics + Production + Economics Informed Well Count Predictor**")
 
-uploaded_excel = st.file_uploader("Upload NPV Excel file", type=["xlsx"])
-uploaded_dats = st.file_uploader("Upload CMG .dat files (optional)", type=["dat"], accept_multiple_files=True)
-uploaded_outs = st.file_uploader("Upload CMG .out files (recommended)", type=["out", "txt"], accept_multiple_files=True)
+# File uploaders
+uploaded_excel = st.file_uploader("📊 Upload NPV Excel file (Required)", type=["xlsx"])
+uploaded_dats = st.file_uploader("📄 Upload CMG .dat files (Optional)", type=["dat"], accept_multiple_files=True)
+uploaded_outs = st.file_uploader("📈 Upload CMG .out files (Optional)", type=["out", "txt"], accept_multiple_files=True)
 
+# Initialize storage for parsed data
 npv_data = {}
 production_data = {}
 base_features = {}
+dat_features = {}
 
+# Parse uploaded files
 if uploaded_excel:
     with open("temp.xlsx", "wb") as f:
         f.write(uploaded_excel.getbuffer())
     npv_data = extract_npv_from_excel("temp.xlsx")
     os.remove("temp.xlsx")
 
-dat_features = {}
 if uploaded_dats:
     for f in uploaded_dats:
         content = f.getvalue().decode('utf-8', errors='ignore')
@@ -170,42 +169,82 @@ if uploaded_outs:
             if data:
                 production_data[wells] = data
 
-# Display extracted info
-if npv_data:
-    st.success(f"Found {len(npv_data)} NPV scenarios: {sorted(npv_data.keys())} wells")
-    st.write("**NPV values:**", {k: f"${v:,.0f}" for k, v in npv_data.items()})
+# Display file upload status
+st.markdown("---")
+st.subheader("📁 Upload Status")
 
-if dat_features:
-    st.success(f"Parsed reservoir properties from {len(dat_features)} .dat files")
-    for w, info in dat_features.items():
-        f = info["data"]
-        
-        # Build grid string
-        if f.get('nx') and f.get('ny') and f.get('nz'):
-            grid_str = f"{f['nx']}×{f['ny']}×{f['nz']}"
-        else:
-            grid_str = "?"
-        
-        # Build permeability string
-        perm_val = f.get('perm_i_md')
-        perm_str = f"Perm I = {perm_val:.1f} md" if perm_val is not None else "Perm I = N/A"
-        
-        # Build Kv/Kh string
-        kvkh_val = f.get('kv_kh_ratio')
-        kvkh_str = f"Kv/Kh = {kvkh_val:.3f}" if kvkh_val is not None else "Kv/Kh = N/A"
-        
-        # Build area string
-        area_val = f.get('area_acres')
-        area_str = f"Area ≈ {area_val:.0f} acres" if area_val is not None else "Area = N/A"
-        
-        st.write(f"**{w} wells** ({info['file']}): Grid {grid_str}, {perm_str}, {kvkh_str}, {area_str}")
+col1, col2, col3 = st.columns(3)
+with col1:
+    if npv_data:
+        st.success(f"✅ NPV Data: {len(npv_data)} scenarios")
+    else:
+        st.warning("⚠️ NPV Data: Not uploaded")
 
-if production_data:
-    st.success(f"Extracted production data from {len(production_data)} .out files")
-    for w, p in production_data.items():
-        rf_str = f"{p.get('recovery_factor',0):.1%}" if p.get('recovery_factor') is not None else "N/A"
-        st.write(f"**{w} wells**: Cum Oil = {p.get('cum_oil_mstb',0):.1f} MSTB, "
-                 f"Recovery Factor = {rf_str}, OOIP ≈ {p.get('ooip_mstb',0):.1f} MSTB")
+with col2:
+    if dat_features:
+        st.success(f"✅ DAT Files: {len(dat_features)} parsed")
+    else:
+        st.info("ℹ️ DAT Files: Optional")
+
+with col3:
+    if production_data:
+        st.success(f"✅ OUT Files: {len(production_data)} parsed")
+    else:
+        st.info("ℹ️ OUT Files: Optional")
+
+# Show detailed information if files are uploaded
+if npv_data or dat_features or production_data:
+    st.markdown("---")
+    st.subheader("📊 Extracted Data Summary")
+    
+    if npv_data:
+        with st.expander("💰 NPV Data Details", expanded=True):
+            st.write(f"**Found {len(npv_data)} NPV scenarios:** {sorted(npv_data.keys())} wells")
+            npv_df = pd.DataFrame([
+                {"Wells": k, "NPV (USD)": f"${v:,.0f}"} 
+                for k, v in sorted(npv_data.items())
+            ])
+            st.dataframe(npv_df, use_container_width=True)
+    
+    if dat_features:
+        with st.expander("🗂️ Reservoir Properties (.dat files)", expanded=False):
+            for w, info in dat_features.items():
+                f = info["data"]
+                
+                if f.get('nx') and f.get('ny') and f.get('nz'):
+                    grid_str = f"{f['nx']}×{f['ny']}×{f['nz']}"
+                else:
+                    grid_str = "?"
+                
+                perm_val = f.get('perm_i_md')
+                perm_str = f"{perm_val:.1f} md" if perm_val is not None else "N/A"
+                
+                kvkh_val = f.get('kv_kh_ratio')
+                kvkh_str = f"{kvkh_val:.3f}" if kvkh_val is not None else "N/A"
+                
+                area_val = f.get('area_acres')
+                area_str = f"{area_val:.0f} acres" if area_val is not None else "N/A"
+                
+                st.markdown(f"""
+                **{w} wells** (`{info['file']}`)
+                - Grid: {grid_str}
+                - Permeability I: {perm_str}
+                - Kv/Kh Ratio: {kvkh_str}
+                - Area: {area_str}
+                """)
+    
+    if production_data:
+        with st.expander("📈 Production Data (.out files)", expanded=False):
+            for w, p in production_data.items():
+                rf_val = p.get('recovery_factor')
+                rf_str = f"{rf_val:.1%}" if rf_val is not None else "N/A"
+                
+                st.markdown(f"""
+                **{w} wells**
+                - Cumulative Oil: {p.get('cum_oil_mstb', 0):.1f} MSTB
+                - Recovery Factor: {rf_str}
+                - OOIP: {p.get('ooip_mstb', 0):.1f} MSTB
+                """)
 
 # Average base features from .dat files
 if dat_features:
@@ -215,36 +254,134 @@ if dat_features:
         if vals:
             base_features[k] = np.mean(vals)
 
-# Prediction
-if npv_data and len(npv_data) >= 2:
-    try:
-        best_wells, best_npv, cand_wells, pred_npv, act_wells, act_npv = predict_optimum(
-            npv_data, base_features, production_data
-        )
-        
-        st.markdown("## 🎯 Optimal Development Recommendation")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("**Optimal Number of Wells**", best_wells)
-        with col2:
-            st.metric("**Predicted Maximum NPV**", f"${best_npv:,.0f}")
+# Prediction section with button
+st.markdown("---")
 
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.scatter(act_wells, act_npv, color='blue', s=100, label='Actual NPV (Excel)')
-        ax.plot(cand_wells, pred_npv, color='red', linewidth=3, label='Predicted Trend')
-        ax.axvline(best_wells, color='green', linestyle='--', linewidth=2, label=f'Optimum: {best_wells} wells')
-        ax.set_xlabel('Number of Wells')
-        ax.set_ylabel('NPV (USD)')
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        st.pyplot(fig)
+# Check if ready to predict
+can_predict = npv_data and len(npv_data) >= 2
 
-        if best_wells > max(act_wells):
-            st.success("💡 Model recommends **more wells** — potential upside!")
-        elif best_wells < min(act_wells):
-            st.warning("⚠️ Model suggests diminishing returns — fewer wells may be optimal.")
+if can_predict:
+    st.subheader("🚀 Run Optimization Analysis")
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.write(f"Ready to analyze {len(npv_data)} scenarios and predict optimal well count.")
+        if dat_features:
+            st.write(f"✓ Using reservoir properties from {len(dat_features)} .dat file(s)")
+        if production_data:
+            st.write(f"✓ Using production data from {len(production_data)} .out file(s)")
+    
+    with col2:
+        run_optimization = st.button("🎯 Find Optimal Wells", type="primary", use_container_width=True)
+    
+    if run_optimization:
+        with st.spinner("🔄 Running machine learning optimization..."):
+            try:
+                best_wells, best_npv, cand_wells, pred_npv, act_wells, act_npv = predict_optimum(
+                    npv_data, base_features, production_data
+                )
+                
+                st.markdown("---")
+                st.markdown("## 🎯 Optimization Results")
+                
+                # Main metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("**Optimal Well Count**", best_wells, help="Recommended number of wells for maximum NPV")
+                with col2:
+                    st.metric("**Maximum NPV**", f"${best_npv:,.0f}", help="Predicted Net Present Value at optimal well count")
+                with col3:
+                    improvement = ((best_npv - max(act_npv)) / max(act_npv) * 100)
+                    st.metric("**NPV Improvement**", f"{improvement:+.1f}%", help="Improvement vs best scenario in data")
+                
+                # Plot
+                st.markdown("### 📊 NPV vs Well Count Analysis")
+                fig, ax = plt.subplots(figsize=(12, 7))
+                ax.scatter(act_wells, act_npv, color='#1f77b4', s=150, label='Actual NPV (Excel Data)', 
+                          zorder=5, edgecolors='white', linewidth=2)
+                ax.plot(cand_wells, pred_npv, color='#ff7f0e', linewidth=3, label='ML Predicted Trend', alpha=0.8)
+                ax.axvline(best_wells, color='#2ca02c', linestyle='--', linewidth=2.5, 
+                          label=f'Optimum: {best_wells} wells', alpha=0.8)
+                ax.scatter([best_wells], [best_npv], color='#2ca02c', s=300, marker='*', 
+                          zorder=6, edgecolors='white', linewidth=2, label='Optimal Point')
+                
+                ax.set_xlabel('Number of Wells', fontsize=12, fontweight='bold')
+                ax.set_ylabel('NPV (USD)', fontsize=12, fontweight='bold')
+                ax.set_title('Well Count Optimization Analysis', fontsize=14, fontweight='bold', pad=20)
+                ax.grid(True, alpha=0.3, linestyle='--')
+                ax.legend(loc='best', fontsize=10, framealpha=0.9)
+                
+                # Format y-axis as currency
+                from matplotlib.ticker import FuncFormatter
+                def currency(x, pos):
+                    return f'${x/1e6:.1f}M' if abs(x) >= 1e6 else f'${x/1e3:.0f}K'
+                ax.yaxis.set_major_formatter(FuncFormatter(currency))
+                
+                plt.tight_layout()
+                st.pyplot(fig)
+                
+                # Recommendations
+                st.markdown("### 💡 Recommendations")
+                if best_wells > max(act_wells):
+                    st.success(f"""
+                    **Upside Potential Identified!**
+                    
+                    The model predicts that increasing well count to **{best_wells} wells** (beyond your current maximum of {max(act_wells)} wells) 
+                    could improve NPV by **${(best_npv - max(act_npv)):,.0f}** ({improvement:+.1f}%).
+                    
+                    Consider running additional scenarios to validate this prediction.
+                    """)
+                elif best_wells < min(act_wells):
+                    st.warning(f"""
+                    **Diminishing Returns Detected**
+                    
+                    The model suggests that **{best_wells} wells** may be optimal, which is fewer than your minimum tested scenario ({min(act_wells)} wells).
+                    
+                    This indicates potential over-development in current plans. Consider cost-benefit analysis for reduced well counts.
+                    """)
+                else:
+                    st.info(f"""
+                    **Optimal Range Identified**
+                    
+                    The model predicts **{best_wells} wells** is optimal, which falls within your tested range ({min(act_wells)}-{max(act_wells)} wells).
+                    
+                    Your current scenarios cover the optimal development strategy well.
+                    """)
+                
+                # Model features used
+                with st.expander("🔬 Model Features & Methodology", expanded=False):
+                    st.markdown("""
+                    **Features Used in ML Model:**
+                    - Well count and quadratic term (interference effects)
+                    - Drainage area per well
+                    - Well interference factor
+                    - Recovery potential (permeability-based)
+                    - Vertical-horizontal permeability effects
+                    """)
+                    
+                    if production_data:
+                        st.markdown("- Recovery factor data\n- Oil production per well\n- Water production penalty")
+                    
+                    st.markdown(f"""
+                    **Model Type:** Polynomial Regression (degree 3)
+                    
+                    **Training Data:** {len(npv_data)} scenarios
+                    
+                    **Prediction Range:** {min(cand_wells)} to {max(cand_wells)} wells
+                    """)
+            
+            except Exception as e:
+                st.error(f"❌ Optimization failed: {str(e)}")
+                st.exception(e)
 
-    except Exception as e:
-        st.error(f"Prediction failed: {str(e)}")
 else:
-    st.info("👆 Upload your Excel NPV file and at least two scenario files (.dat or .out) to get a prediction.")
+    st.info("""
+    ### ⚠️ Requirements to Run Optimization
+    
+    Please upload:
+    1. **NPV Excel file** with at least **2 scenarios** (different well counts)
+    2. Optional: .dat files for reservoir properties
+    3. Optional: .out files for production data
+    
+    The more data you provide, the better the prediction accuracy!
+    """)
