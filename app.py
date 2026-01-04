@@ -17,7 +17,6 @@ def parse_dat_features(content):
     grid_match = re.search(r'GRID CORNER\s+(\d+)\s+(\d+)\s+(\d+)', content)
     if grid_match:
         features['nx'], features['ny'], features['nz'] = map(int, grid_match.groups())
-        features['total_cells'] = features['nx'] * features['ny'] * features['nz']
     
     di = re.findall(r'DI IVAR\s+((?:\s*\d+\.?\d*){1,40})', content)
     dj = re.findall(r'DJ JVAR\s+((?:\s*\d+\.?\d*){1,25})', content)
@@ -26,10 +25,11 @@ def parse_dat_features(content):
     features['avg_dx'] = np.mean(all_dx) if all_dx else None
     features['avg_dy'] = np.mean(all_dy) if all_dy else None
     
-    permj_match = re.search(r"RESULTS SPEC 'Permeability J'.*EQUALSI 0\s+([\d.]+)", content, re.IGNORECASE)
+    # Fixed regex to capture the value correctly
+    permj_match = re.search(r"EQUALSI\s+0\s+([\d.]+)", content, re.IGNORECASE)
     features['perm_i_md'] = float(permj_match.group(1)) if permj_match else None
     
-    permk_match = re.search(r"RESULTS SPEC 'Permeability K'.*EQUALSI 1\s+([\d.]+)", content, re.IGNORECASE)
+    permk_match = re.search(r"EQUALSI\s+1\s+([\d.]+)", content, re.IGNORECASE)
     features['perm_k_md'] = float(permk_match.group(1)) if permk_match else None
     
     if features.get('perm_i_md') and features.get('perm_k_md') and features['perm_i_md'] > 0:
@@ -89,7 +89,7 @@ def build_feature_vector(wells, base_features, production=None):
         area = base_features.get('area_acres', 1000)
         drainage = area / wells if wells > 0 else area
         interference = 1 / (1 + wells / 10)
-        perm_sqrt = base_features.get('perm_i_md', 100) ** 0.5
+        perm_sqrt = base_features.get('perm_i_md', 100) ** 0.5 if base_features.get('perm_i_md') else 10
         recovery_pot = perm_sqrt * np.log(wells + 1)
         kvkh_term = wells * base_features.get('kv_kh_ratio', 0.1)
         vec.extend([drainage, interference, recovery_pot, kvkh_term])
@@ -179,11 +179,11 @@ if dat_features:
     st.success(f"Parsed reservoir properties from {len(dat_features)} .dat files")
     for w, info in dat_features.items():
         f = info["data"]
-        perm_str = f"Perm I = {safe_format(f.get('perm_i_md'), '{:.1f}')} md" if f.get('perm_i_md') else "Perm I = N/A"
+        grid_str = f"{f.get('nx','?')}×{f.get('ny','?')}×{f.get('nz','?')}" if f.get('nx') else "?"
+        perm_str = f"Perm I = {safe_format(f.get('perm_i_md'), '{:.1f}')} md" if f.get('perm_i_md') is not None else "Perm I = N/A"
         kvkh_str = f"Kv/Kh = {safe_format(f.get('kv_kh_ratio'))}" if f.get('kv_kh_ratio') is not None else "Kv/Kh = N/A"
-        area_str = f"Area ≈ {safe_format(f.get('area_acres'), '{:.0f}')} acres" if f.get('area_acres') else "Area = N/A"
-        st.write(f"**{w} wells** ({info['file']}): Grid {f.get('nx','?')}×{f.get('ny','?')}×{f.get('nz','?')}, "
-                 f"{perm_str}, {kvkh_str}, {area_str}")
+        area_str = f"Area ≈ {safe_format(f.get('area_acres'), '{:.0f}')} acres" if f.get('area_acres') is not None else "Area = N/A"
+        st.write(f"**{w} wells** ({info['file']}): Grid {grid_str}, {perm_str}, {kvkh_str}, {area_str}")
 
 if production_data:
     st.success(f"Extracted production data from {len(production_data)} .out files")
